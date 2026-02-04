@@ -4,6 +4,7 @@ import json
 import tarfile
 from pathlib import Path
 from typing import List
+
 from tqdm import tqdm
 import ray
 import torch
@@ -38,10 +39,10 @@ def finalize_json(tmp_jsonl: Path, final_json: Path):
 
 
 def validate_and_clip_bbox(x1, y1, x2, y2, img_w, img_h):
-    x1 = max(0.0, min(x1, img_w))
-    y1 = max(0.0, min(y1, img_h))
-    x2 = max(0.0, min(x2, img_w))
-    y2 = max(0.0, min(y2, img_h))
+    x1 = max(0.0, min(float(x1), img_w))
+    y1 = max(0.0, min(float(y1), img_h))
+    x2 = max(0.0, min(float(x2), img_w))
+    y2 = max(0.0, min(float(y2), img_h))
 
     if x2 <= x1 or y2 <= y1:
         return None
@@ -52,6 +53,7 @@ def validate_and_clip_bbox(x1, y1, x2, y2, img_w, img_h):
 # ============================================================
 # SOURCE SEGMENTATION
 # ============================================================
+
 def segment_source(config: dict) -> None:
 
     pipe = config["tool"]["pipeline"]
@@ -72,28 +74,18 @@ def segment_source(config: dict) -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ============================================================
-    # Ray Actor
-    # ============================================================
-
     @ray.remote(num_gpus=1)
     class SAMOnlyActor:
         def __init__(self):
-            print(
-                f"[SAMOnlyActor INIT] PID={os.getpid()} | "
-                f"Ray GPU IDs={ray.get_gpu_ids()} | "
-                f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}"
-            )
-
             gpu_id = ray.get_gpu_ids()[0] if ray.get_gpu_ids() else None
-            device_str = str(gpu_id) if gpu_id is not None else ""
+            device = str(gpu_id) if gpu_id is not None else ""
 
             self.predictor = SAM3SemanticPredictor(
                 overrides=dict(
                     task="segment",
                     mode="predict",
                     model=sam_model,
-                    device=device_str,
+                    device=device,
                     half=True,
                     save=False,
                     imgsz=644,
@@ -131,11 +123,7 @@ def segment_source(config: dict) -> None:
                             continue
 
                         x1, y1, x2, y2 = clipped
-
-                        # IMPORTANT: cast to float to avoid float32 overflow
-                        w = float(x2) - float(x1)
-                        h = float(y2) - float(y1)
-                        area = w * h
+                        area = (x2 - x1) * (y2 - y1)
 
                         if area < min_area:
                             continue
@@ -143,21 +131,13 @@ def segment_source(config: dict) -> None:
                         out.append({
                             "bbox": [x1, y1, x2, y2],
                             "label": tag_chunk[i % len(tag_chunk)],
-                            "area": area,
+                            "area": float(area),
                         })
 
             torch.cuda.empty_cache()
             return out
 
-    # ============================================================
-    # Actor Pool
-    # ============================================================
-
-    actors = [SAMOnlyActor.remote() for _ in range(num_gpus)]
-
-    # ============================================================
-    # Shard Loop (THIS is where tqdm belongs)
-    # ============================================================
+    actors = []
 
     for shard in tqdm(range(start, end), desc="Source shards"):
         shard_id = f"{shard:05d}"
@@ -171,6 +151,9 @@ def segment_source(config: dict) -> None:
 
         if final_json.exists():
             continue
+
+        if not actors:
+            actors = [SAMOnlyActor.remote() for _ in range(num_gpus)]
 
         with open(tag_path) as f:
             tag_map = {x["key"]: x["tags"] for x in json.load(f)}
@@ -200,10 +183,7 @@ def segment_source(config: dict) -> None:
 
                 fobj = tar.extractfile(m)
                 if not fobj or not tags:
-                    write_jsonl(
-                        tmp_jsonl,
-                        {"key": key, **meta.get(key, {}), "boxes": []},
-                    )
+                    write_jsonl(tmp_jsonl, {"key": key, **meta.get(key, {}), "boxes": []})
                     continue
 
                 img_bytes = fobj.read()
@@ -213,21 +193,16 @@ def segment_source(config: dict) -> None:
                 if len(inflight) >= MAX_INFLIGHT:
                     k, fut = inflight.pop(0)
                     boxes = ray.get(fut)
-                    write_jsonl(
-                        tmp_jsonl,
-                        {"key": k, **meta.get(k, {}), "boxes": boxes},
-                    )
+                    write_jsonl(tmp_jsonl, {"key": k, **meta.get(k, {}), "boxes": boxes})
 
         for k, fut in inflight:
             boxes = ray.get(fut)
-            write_jsonl(
-                tmp_jsonl,
-                {"key": k, **meta.get(k, {}), "boxes": boxes},
-            )
+            write_jsonl(tmp_jsonl, {"key": k, **meta.get(k, {}), "boxes": boxes})
 
         finalize_json(tmp_jsonl, final_json)
 
     print("Source segmentation complete.")
+
 
 # ============================================================
 # TARGET SEGMENTATION
@@ -253,6 +228,7 @@ def segment_target(folder: str, config: dict) -> None:
     final_json = output_dir / "results.json"
 
     if final_json.exists():
+        print(f"[SKIP] Target segmentation already done for {folder}")
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -262,14 +238,14 @@ def segment_target(folder: str, config: dict) -> None:
     class SAMOnlyActor:
         def __init__(self):
             gpu_id = ray.get_gpu_ids()[0] if ray.get_gpu_ids() else None
-            device_str = str(gpu_id) if gpu_id is not None else ""
+            device = str(gpu_id) if gpu_id is not None else ""
 
             self.predictor = SAM3SemanticPredictor(
                 overrides=dict(
                     task="segment",
                     mode="predict",
                     model=sam_model,
-                    device=device_str,
+                    device=device,
                     half=True,
                     save=False,
                     imgsz=644,
@@ -290,10 +266,9 @@ def segment_target(folder: str, config: dict) -> None:
             self.predictor.set_image(image)
 
             out = []
-            MAX_TAGS = 12
 
             with torch.no_grad():
-                for chunk in tqdm(chunk_list(tags, MAX_TAGS)):
+                for chunk in chunk_list(tags, 12):
                     results = self.predictor(text=chunk)
                     if not results or not hasattr(results[0], "boxes"):
                         continue
@@ -310,11 +285,11 @@ def segment_target(folder: str, config: dict) -> None:
                         x1, y1, x2, y2 = clipped
                         area = (x2 - x1) * (y2 - y1)
 
-                        if area < min_area or not torch.isfinite(torch.tensor(area)):
+                        if area < min_area:
                             continue
 
                         out.append({
-                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                            "bbox": [x1, y1, x2, y2],
                             "label": chunk[i % len(chunk)],
                             "area": float(area),
                         })
@@ -322,15 +297,14 @@ def segment_target(folder: str, config: dict) -> None:
             torch.cuda.empty_cache()
             return out
 
-    actors = [SAMOnlyActor.remote() for _ in range(num_gpus)]
-
     with open(input_json) as f:
         data = json.load(f)
 
-    MAX_INFLIGHT = num_gpus * 2
+    actors = []
     inflight = []
+    MAX_INFLIGHT = num_gpus * 2
 
-    for idx, item in enumerate(data):
+    for idx, item in enumerate(tqdm(data, desc=f"Target {folder}")):
         key = item["key"]
         tags = item.get("tags", [])
 
@@ -348,6 +322,9 @@ def segment_target(folder: str, config: dict) -> None:
             })
             continue
 
+        if not actors:
+            actors = [SAMOnlyActor.remote() for _ in range(num_gpus)]
+
         img_bytes = img_file.read_bytes()
         actor = actors[idx % len(actors)]
         inflight.append((key, img_file, actor.segment.remote(img_bytes, tags), item))
@@ -360,6 +337,7 @@ def segment_target(folder: str, config: dict) -> None:
 
     finalize_json(tmp_jsonl, final_json)
     print(f"[DONE] Target segmentation complete for {folder}")
+    print(f"[OUTPUT] {final_json.resolve()}")
 
 
 def _flush_target(item, crops_dir: Path, tmp_jsonl: Path):
@@ -370,12 +348,21 @@ def _flush_target(item, crops_dir: Path, tmp_jsonl: Path):
     saved = []
     for i, b in enumerate(boxes):
         x1, y1, x2, y2 = map(int, b["bbox"])
+
+        # Clamp to image bounds
         x1 = max(0, x1)
         y1 = max(0, y1)
         x2 = min(image.width, x2)
         y2 = min(image.height, y2)
 
         if x2 <= x1 or y2 <= y1:
+            continue
+
+        crop_w = x2 - x1
+        crop_h = y2 - y1
+
+        # 🔴 NEW CONDITION: skip small crops
+        if crop_w < 100 or crop_h < 100:
             continue
 
         crop = image.crop((x1, y1, x2, y2))
