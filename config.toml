@@ -1,0 +1,46 @@
+[project]
+name = "eros-autotagging"
+version = "2.0.0"
+dependencies = [
+    "ray[data]",
+    "torch",
+    "transformers",
+    "ultralytics",
+    "faiss-gpu",
+    "pillow",
+    "numpy",
+    "pyarrow"
+]
+
+[tool.pipeline]
+# Hardware
+num_gpus = 4
+num_cpus = 120
+object_store_gb = 100
+
+# Models
+sam_model = "sam3.pt"
+clip_model = "ViT-B/32"
+min_area = 150
+
+# Batching (H200 optimized)
+batch_images = 128           # Segmentation batch
+batch_clips = 192           # CLIP batch
+batch_faiss = 20000         # FAISS search batch
+
+# Paths - Source (run once)
+source_dataset = "/data/corerndimage/image_tagging/source_dataset/internet_indian_dataset"
+source_tags = "/data/corerndimage/image_tagging/source_dataset/vlm_tags"
+source_output = "./source_processed"
+
+# Paths - Target (per folder)
+target_dataset = "/data/corerndimage/image_tagging/target_dataset"
+target_output = "./target_processed"
+
+# FAISS
+faiss_index_dir = "/data/corerndimage/image_tagging/faiss_index"
+faiss_k = 10
+
+# Shards (source only)
+start_shard = 0
+end_shard = 100
