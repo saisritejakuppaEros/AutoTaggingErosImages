@@ -7,24 +7,21 @@ import ray
 
 # ==============================
 # Import pipeline entry functions
-# (ALIAS to avoid name collision)
 # ==============================
 from scripts.segmentation import (
     segment_source as run_segment_source,
     segment_target as run_segment_target,
 )
 
-# Placeholders (keep commented until implemented)
-# from scripts.embeddings import (
-#     embed_source_dataset,
-#     embed_target_dataset,
-# )
-#
-# from scripts.tagging import (
-#     build_faiss_index,
-#     tag_target_dataset,
-# )
+from scripts.embeddings import (
+    embed_source as run_embed_source,
+    embed_target as run_embed_target,
+)
 
+from scripts.tagging import (
+    build_faiss_index as run_build_faiss_index,
+    tag_target as run_tag_target,
+)
 
 # ==============================
 # Config Loader
@@ -61,32 +58,29 @@ def cmd_segment_source(cfg):
     run_segment_source(cfg)
 
 
+def cmd_embed_source(cfg):
+    init_ray(cfg["tool"]["pipeline"])
+    run_embed_source(cfg)
+
+
 def cmd_segment_target(cfg, folder):
     init_ray(cfg["tool"]["pipeline"])
     run_segment_target(folder, cfg)
 
 
-# (Keep disabled until implemented)
-# def cmd_embed_source(cfg):
-#     init_ray(cfg["tool"]["pipeline"])
-#     embed_source_dataset(cfg)
-#
-#
-# def cmd_embed_target(cfg, folder):
-#     init_ray(cfg["tool"]["pipeline"])
-#     embed_target_dataset(cfg, folder)
-#
-#
-# def cmd_tag_target(cfg, folder):
-#     init_ray(cfg["tool"]["pipeline"])
-#     tag_target_dataset(cfg, folder)
-#
-#
-# def cmd_process_target(cfg, folder):
-#     init_ray(cfg["tool"]["pipeline"])
-#     run_segment_target(folder, cfg)
-#     embed_target_dataset(cfg, folder)
-#     tag_target_dataset(cfg, folder)
+def cmd_embed_target(cfg, folder):
+    init_ray(cfg["tool"]["pipeline"])
+    run_embed_target(folder, cfg)
+
+
+def cmd_build_faiss(cfg):
+    init_ray(cfg["tool"]["pipeline"])
+    run_build_faiss_index(cfg)
+
+
+def cmd_tag_target(cfg, folder):
+    init_ray(cfg["tool"]["pipeline"])
+    run_tag_target(folder, cfg)
 
 
 # ==============================
@@ -107,9 +101,19 @@ def build_parser():
 
     # -------- Source --------
     subparsers.add_parser("segment-source")
+    subparsers.add_parser("embed-source")
 
     # -------- Target --------
     p = subparsers.add_parser("segment-target")
+    p.add_argument("--folder", required=True)
+
+    p = subparsers.add_parser("embed-target")
+    p.add_argument("--folder", required=True)
+
+    # -------- Index / Tagging --------
+    subparsers.add_parser("build-faiss")
+    
+    p = subparsers.add_parser("tag-target")
     p.add_argument("--folder", required=True)
 
     return parser
@@ -130,11 +134,27 @@ def main():
     if args.command == "segment-source":
         cmd_segment_source(cfg)
 
+    elif args.command == "embed-source":
+        cmd_embed_source(cfg)
+
     elif args.command == "segment-target":
         cmd_segment_target(cfg, args.folder)
 
+    elif args.command == "embed-target":
+        cmd_embed_target(cfg, args.folder)
+
+    elif args.command == "build-faiss":
+        cmd_build_faiss(cfg)
+
+    elif args.command == "tag-target":
+        cmd_tag_target(cfg, args.folder)
+
     else:
         raise ValueError(f"Unknown command: {args.command}")
+
+    # ✅ CLEAN RAY SHUTDOWN
+    if ray.is_initialized():
+        ray.shutdown()
 
 
 if __name__ == "__main__":

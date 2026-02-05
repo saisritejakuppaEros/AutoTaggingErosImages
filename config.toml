@@ -31,16 +31,18 @@ batch_faiss = 20000         # FAISS search batch
 # Paths - Source (run once)
 source_dataset = "/data/corerndimage/image_tagging/source_dataset/internet_indian_dataset"
 source_tags = "/data/corerndimage/image_tagging/source_dataset/vlm_tags"
-source_output = "./outputs/source_processed"
+source_output = "./source_processed"
+source_embeddings = "./source_embeddings"
 
 # Paths - Target (per folder)
-target_dataset = "/data/corerndimage/image_tagging/target_dataset/00291"
-target_output = "./outputs/target_processed"
+target_dataset = "/data/corerndimage/image_tagging/target_dataset"
+target_output = "./target_processed"
 
-# FAISS
-faiss_index_dir = "/data/corerndimage/image_tagging/faiss_index"
+# # FAISS
+source_csv = "/data/corerndimage/image_tagging/AutoTaggingErosImages/all_themes_dedup.csv"
+faiss_index_dir = "./faiss_index"
 faiss_k = 10
 
 # Shards (source only)
 start_shard = 0
-end_shard = 1
+end_shard = 100
